@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { merge } from './merge.mjs';
 
 const read = (p) => JSON.parse(readFileSync(new URL(p, import.meta.url), 'utf8'));
@@ -8,8 +9,8 @@ const run = () =>
   merge({
     image: read('./fixtures/image.cdx.json'),
     lock: read('./fixtures/lock.cdx.json'),
-    appPath: new URL('./fixtures/workspace/apps/api', import.meta.url).pathname,
-    lockfile: new URL('./fixtures/workspace/pnpm-lock.yaml', import.meta.url).pathname,
+    appPath: fileURLToPath(new URL('./fixtures/workspace/apps/api', import.meta.url)),
+    lockfile: fileURLToPath(new URL('./fixtures/workspace/pnpm-lock.yaml', import.meta.url)),
   });
 const byName = (sbom, name) => sbom.components.find((c) => c.name === name);
 const bundled = (c) => c?.properties?.some((p) => p.name === 'controlc:bundled' && p.value === 'true');
