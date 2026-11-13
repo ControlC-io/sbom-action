@@ -11,8 +11,11 @@ inputs:
     description: Folder of the deployed app's package.json, relative to the checkout.
     default: .
   lockfile:
-    description: pnpm lockfile (v9), relative to the checkout.
-    default: pnpm-lock.yaml
+    description: >-
+      Lockfile relative to the checkout: pnpm-lock.yaml (v9) or package-lock.json (v2/v3), chosen by
+      file name. Empty: use pnpm-lock.yaml, else package-lock.json, found in the checkout root.
+    default: ''
+
   token:
     description: Token that can push packages to the image's repository.
     default: ${{ github.token }}
@@ -60,6 +63,12 @@ runs:
       run: |
         set -euo pipefail
         out="${RUNNER_TEMP}/sbom"
+        if [ -z "$LOCKFILE" ]; then
+          for f in pnpm-lock.yaml package-lock.json; do
+            if [ -f "${GITHUB_WORKSPACE}/$f" ]; then LOCKFILE="$f"; break; fi
+          done
+        fi
+        [ -n "$LOCKFILE" ] || { echo "::error::no pnpm-lock.yaml or package-lock.json in the checkout root; set the lockfile input"; exit 1; }
         node "${GITHUB_ACTION_PATH}/merge.mjs" \
           --image "${out}/image.cdx.json" --lock "${out}/lock.cdx.json" \
           --app "${GITHUB_WORKSPACE}/${APP_PATH}" --lockfile "${GITHUB_WORKSPACE}/${LOCKFILE}" \

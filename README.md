@@ -13,7 +13,7 @@ It holds no secrets and is public so repositories in any GitHub organisation can
   with:
     image: ghcr.io/owner/name@sha256:...   # required, the pushed digest
     app-path: apps/api                     # folder of the deployed app's package.json (default .)
-    lockfile: pnpm-lock.yaml               # pnpm lockfile v9 (default pnpm-lock.yaml)
+    lockfile: pnpm-lock.yaml               # or package-lock.json; default: whichever is in the checkout root
     token: ${{ github.token }}             # default; needs packages: write
 ```
 
@@ -25,7 +25,7 @@ Run it only after an image was actually pushed.
 1. Syft (pinned) scans the pushed image: OS packages, runtimes, anything installed in the image.
 2. Syft scans the checkout, which reads the lockfile.
 3. `merge.mjs` computes the app's **production** dependency closure from the `package.json` files
-   and the lockfile (the app's `dependencies`, `optionalDependencies`, `peerDependencies`, plus the
+   and the lockfile, `pnpm-lock.yaml` (v9) or `package-lock.json` (v2/v3), chosen by file name (the app's `dependencies`, `optionalDependencies`, `peerDependencies`, plus the
    same for each `workspace:` package it uses, and everything those pull in). Lockfile libraries in
    that closure and missing from the image scan are added. devDependencies are left out.
 4. ORAS attaches the result with artifact type `application/vnd.cyclonedx+json`, then prints
@@ -73,4 +73,6 @@ is attached, that `vitest` is absent and an OS component is present, and which l
 
 ## Limits
 
-- pnpm lockfile v9 only. Other package managers are not read; the action fails with a clear message.
+- pnpm lockfile v9 and npm `package-lock.json` v2/v3 only. Yarn and others are not read; the action
+  fails with a clear message. For npm, dev-only entries (`dev: true`) are left out and workspace
+  packages (`link: true`) are followed.

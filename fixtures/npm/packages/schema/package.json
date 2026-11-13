@@ -1,0 +1,3 @@
+{ "name": "@fx/schema", "version": "1.0.0", "private": true,
+  "dependencies": { "zod": "3.25.67" },
+  "devDependencies": { "vitest": "3.2.4" } }

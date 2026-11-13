@@ -7,7 +7,7 @@
 // Only node: built-ins are used. The production closure comes from the package.json files and
 // the pnpm lockfile (lockfileVersion 9), never from Syft, which does not flag dev dependencies.
 import { readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, normalize, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const BUNDLED = { name: 'controlc:bundled', value: 'true' };
@@ -39,25 +39,34 @@ export function parseLockfile(text) {
 
 const stripPeers = (v) => String(v).replace(/\(.*$/, '');
 
+// A pnpm dependency value is either a version ("5.4.0") or, for an npm alias, the real package id
+// ("lodash@4.17.21"). Returns the exact snapshot key (peer suffix kept) for it.
+function pnpmKey(name, value) {
+  const v = String(value);
+  const plain = stripPeers(v);
+  return /^(@?[^@:]+)@./.test(plain) && !/^[a-z]+:/.test(plain) ? v : `${name}@${v}`;
+}
+
 function purlOf(c) {
-  const m = /^pkg:npm\/([^@?#]+(?:@[^@?#]+)?)@([^?#]+)/.exec(c.purl ?? '');
+  const m = /^pkg:npm\/([^?#]+)/.exec(c.purl ?? '');
   if (!m) return null;
-  // purl encodes the scope's "@" as %40; the name may also be written "@scope/name".
-  return { name: decodeURIComponent(m[1]), version: decodeURIComponent(m[2]) };
+  const at = m[1].lastIndexOf('@');
+  if (at <= 0) return null;
+  // purl encodes the scope's "@" as %40; decode before comparing.
+  return { name: decodeURIComponent(m[1].slice(0, at)), version: decodeURIComponent(m[1].slice(at + 1)) };
 }
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
-export function merge({ image, lock, appPath, lockfile }) {
+// Each reader returns { direct: Set<"name@version">, closure: Set<"name@version"> } for the app.
+function readPnpm(lockfile, appPath) {
   const lockDir = dirname(resolve(lockfile));
   const lf = parseLockfile(readFileSync(lockfile, 'utf8'));
   if (!lf.importers || !lf.snapshots) {
     throw new Error(`${lockfile}: not a pnpm lockfile v9 (no importers/snapshots)`);
   }
-
-  // importer path (relative to the lockfile) -> package.json
   const pkgByImporter = new Map();
   const importerByName = new Map();
   for (const imp of Object.keys(lf.importers)) {
@@ -74,11 +83,10 @@ export function merge({ image, lock, appPath, lockfile }) {
     throw new Error(`app path ${appPath} is not a workspace package of ${lockfile}`);
   }
 
-  // Direct names + production closure (name@version), walking workspace packages recursively.
-  const direct = new Map(); // name -> resolved version
+  const direct = new Set();
   const closure = new Set();
   const seenImporters = new Set();
-  const queue = [];
+  const queue = []; // exact snapshot keys, peer suffix kept
   const visitImporter = (imp) => {
     if (seenImporters.has(imp)) return;
     seenImporters.add(imp);
@@ -86,33 +94,91 @@ export function merge({ image, lock, appPath, lockfile }) {
     const resolved = lf.importers[imp] ?? {};
     for (const field of PROD_FIELDS) {
       for (const [name, spec] of Object.entries(pkg[field] ?? {})) {
-        if (String(spec).startsWith('workspace:')) {
-          const target = importerByName.get(name);
+        const entry = resolved.dependencies?.[name] ?? resolved.optionalDependencies?.[name];
+        const version = entry?.version == null ? '' : String(entry.version);
+        if (String(spec).startsWith('workspace:') || version.startsWith('link:')) {
+          const byPath = version.startsWith('link:') ? normalize(join(imp, version.slice(5))) : null;
+          const target = byPath && pkgByImporter.has(byPath) ? byPath : importerByName.get(name);
           if (target) visitImporter(target);
           continue;
         }
-        const entry = resolved.dependencies?.[name] ?? resolved.optionalDependencies?.[name];
-        const version = entry?.version && stripPeers(entry.version);
         if (!version) continue; // an unresolved peer dependency: not installed, nothing to list
-        direct.set(name, version);
-        queue.push(`${name}@${stripPeers(entry.version)}`);
+        const key = pnpmKey(name, version);
+        direct.add(stripPeers(key));
+        queue.push(key);
       }
     }
   };
   visitImporter(appImporter);
-  const snapshotKeys = new Map(Object.keys(lf.snapshots).map((k) => [stripPeers(k), k]));
+  const seen = new Set();
   while (queue.length) {
-    const id = queue.pop();
-    const plain = stripPeers(id);
-    if (closure.has(plain)) continue;
-    closure.add(plain);
-    const snap = lf.snapshots[snapshotKeys.get(plain) ?? id] ?? {};
+    const key = queue.pop();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    closure.add(stripPeers(key));
+    const snap = lf.snapshots[key] ?? {};
     for (const field of ['dependencies', 'optionalDependencies']) {
-      for (const [name, version] of Object.entries(snap[field] ?? {})) {
-        queue.push(String(version).startsWith('npm:') ? String(version).slice(4) : `${name}@${version}`);
-      }
+      for (const [name, version] of Object.entries(snap[field] ?? {})) queue.push(pnpmKey(name, version));
     }
   }
+  return { direct, closure };
+}
+
+// npm package-lock.json, lockfileVersion 2 or 3 ("packages" map).
+function readNpm(lockfile, appPath) {
+  const lockDir = dirname(resolve(lockfile));
+  const lf = readJson(lockfile);
+  const packages = lf.packages;
+  if (!packages) throw new Error(`${lockfile}: not an npm lockfile v2/v3 (no packages)`);
+  const appKey = relative(lockDir, resolve(appPath)).split('\\').join('/');
+  if (!(appKey in packages)) throw new Error(`app path ${appPath} is not a package of ${lockfile}`);
+  const nameOf = (path) => path.slice(path.lastIndexOf('node_modules/') + 'node_modules/'.length);
+  const find = (from, dep) => {
+    let prefix = from;
+    for (;;) {
+      const path = prefix ? `${prefix}/node_modules/${dep}` : `node_modules/${dep}`;
+      if (path in packages) return path;
+      if (!prefix) return null;
+      const i = prefix.lastIndexOf('/node_modules/');
+      prefix = i === -1 ? '' : prefix.slice(0, i);
+    }
+  };
+  const idOf = (path) => `${packages[path].name ?? nameOf(path)}@${packages[path].version}`;
+
+  const direct = new Set();
+  const closure = new Set();
+  const seen = new Set();
+  const visit = (path, isApp) => {
+    if (seen.has(path)) return;
+    seen.add(path);
+    const entry = packages[path];
+    for (const field of PROD_FIELDS) {
+      for (const dep of Object.keys(entry[field] ?? {})) {
+        const target = find(path, dep);
+        if (!target) continue; // optional or peer dependency that was not installed
+        const t = packages[target];
+        if (t.link) {
+          if (t.resolved in packages) visit(t.resolved, false);
+          continue;
+        }
+        if (t.dev) continue;
+        if (isApp || isWorkspace.has(path)) direct.add(idOf(target));
+        visit(target, false);
+      }
+    }
+    if (!isApp && !isWorkspace.has(path)) closure.add(idOf(path));
+  };
+  // Workspace packages are the targets of link entries; their own deps count as direct.
+  const isWorkspace = new Set(Object.values(packages).filter((p) => p.link).map((p) => p.resolved));
+  isWorkspace.add(appKey);
+  visit(appKey, true);
+  return { direct, closure };
+}
+
+export function merge({ image, lock, appPath, lockfile }) {
+  const { direct, closure } = basename(lockfile) === 'package-lock.json'
+    ? readNpm(lockfile, appPath)
+    : readPnpm(lockfile, appPath);
 
   const out = structuredClone(image);
   out.components ??= [];
@@ -148,8 +214,8 @@ export function merge({ image, lock, appPath, lockfile }) {
   const root = out.metadata.component;
   root['bom-ref'] ??= 'controlc:root';
   const directRefs = [];
-  for (const [name, version] of direct) {
-    const c = inImage.get(`${name}@${version}`) ?? added.get(`${name}@${version}`);
+  for (const id of direct) {
+    const c = inImage.get(id) ?? added.get(id);
     if (c && !directRefs.includes(c['bom-ref'])) directRefs.push(c['bom-ref']);
   }
   out.dependencies ??= [];
