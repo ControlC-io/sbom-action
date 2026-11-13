@@ -1,0 +1,60 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "container",
+      "bom-ref": "img-root",
+      "name": "ghcr.io/controlc-io/sbom-action-test",
+      "version": "sha256:abc"
+    }
+  },
+  "components": [
+    {
+      "type": "operating-system",
+      "bom-ref": "os-alpine",
+      "name": "alpine",
+      "version": "3.22.1"
+    },
+    {
+      "type": "library",
+      "bom-ref": "apk-musl",
+      "name": "musl",
+      "version": "1.2.5-r10",
+      "purl": "pkg:apk/alpine/musl@1.2.5-r10?distro=alpine-3.22.1"
+    },
+    {
+      "type": "library",
+      "bom-ref": "apk-busybox",
+      "name": "busybox",
+      "version": "1.37.0-r18",
+      "purl": "pkg:apk/alpine/busybox@1.37.0-r18?distro=alpine-3.22.1"
+    },
+    {
+      "type": "application",
+      "bom-ref": "bin-node",
+      "name": "node",
+      "version": "22.18.0",
+      "purl": "pkg:generic/node@22.18.0"
+    },
+    {
+      "type": "library",
+      "bom-ref": "i-semver",
+      "name": "semver",
+      "version": "7.8.6",
+      "purl": "pkg:npm/semver@7.8.6"
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "img-root",
+      "dependsOn": [
+        "os-alpine"
+      ]
+    },
+    {
+      "ref": "os-alpine"
+    }
+  ]
+}

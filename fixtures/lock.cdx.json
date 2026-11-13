@@ -1,0 +1,56 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "file",
+      "bom-ref": "lock-root",
+      "name": "."
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "l-fastify",
+      "name": "fastify",
+      "version": "5.4.0",
+      "purl": "pkg:npm/fastify@5.4.0"
+    },
+    {
+      "type": "library",
+      "bom-ref": "l-pino",
+      "name": "pino",
+      "version": "9.14.0",
+      "purl": "pkg:npm/pino@9.14.0"
+    },
+    {
+      "type": "library",
+      "bom-ref": "l-semver",
+      "name": "semver",
+      "version": "7.8.6",
+      "purl": "pkg:npm/semver@7.8.6"
+    },
+    {
+      "type": "library",
+      "bom-ref": "l-zod",
+      "name": "zod",
+      "version": "3.25.67",
+      "purl": "pkg:npm/zod@3.25.67"
+    },
+    {
+      "type": "library",
+      "bom-ref": "l-vitest",
+      "name": "vitest",
+      "version": "3.2.4",
+      "purl": "pkg:npm/vitest@3.2.4"
+    },
+    {
+      "type": "library",
+      "bom-ref": "l-esbuild",
+      "name": "esbuild",
+      "version": "0.28.2",
+      "purl": "pkg:npm/esbuild@0.28.2"
+    }
+  ]
+}

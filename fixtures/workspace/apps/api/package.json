@@ -1,0 +1,3 @@
+{ "name": "@fx/api", "version": "1.0.0", "private": true,
+  "dependencies": { "fastify": "5.4.0", "@fx/schema": "workspace:*" },
+  "devDependencies": { "vitest": "3.2.4" } }
