@@ -1,0 +1,77 @@
+name: SBOM for a container image
+description: >-
+  Generates a CycloneDX SBOM for a pushed image, adds the npm libraries a bundler compiled into it
+  (from the lockfile, production dependencies only), marks the app's direct dependencies, and attaches
+  the SBOM to the image's digest on GHCR without changing the image's own manifest.
+inputs:
+  image:
+    description: Pushed image by digest, e.g. ghcr.io/owner/name@sha256:...
+    required: true
+  app-path:
+    description: Folder of the deployed app's package.json, relative to the checkout.
+    default: .
+  lockfile:
+    description: pnpm lockfile (v9), relative to the checkout.
+    default: pnpm-lock.yaml
+  token:
+    description: Token that can push packages to the image's repository.
+    default: ${{ github.token }}
+runs:
+  using: composite
+  steps:
+    - name: Install Syft
+      id: syft
+      uses: anchore/sbom-action/download-syft@v0.24.3
+      with:
+        syft-version: v1.57.1
+
+    - name: Install ORAS
+      uses: oras-project/setup-oras@v2.0.3
+      with:
+        version: 1.3.1
+
+    - name: Log in to the registry
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        TOKEN: ${{ inputs.token }}
+        ACTOR: ${{ github.actor }}
+      run: |
+        set -euo pipefail
+        printf '%s' "$TOKEN" | oras login "${IMAGE%%/*}" --username "$ACTOR" --password-stdin
+
+    - name: Scan the image and the lockfile
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        SYFT: ${{ steps.syft.outputs.cmd }}
+      run: |
+        set -euo pipefail
+        out="${RUNNER_TEMP}/sbom"
+        mkdir -p "$out"
+        "$SYFT" "registry:${IMAGE}" -o "cyclonedx-json@1.6=${out}/image.cdx.json"
+        "$SYFT" "dir:${GITHUB_WORKSPACE}" -o "cyclonedx-json@1.6=${out}/lock.cdx.json"
+
+    - name: Merge
+      shell: bash
+      env:
+        APP_PATH: ${{ inputs.app-path }}
+        LOCKFILE: ${{ inputs.lockfile }}
+      run: |
+        set -euo pipefail
+        out="${RUNNER_TEMP}/sbom"
+        node "${GITHUB_ACTION_PATH}/merge.mjs" \
+          --image "${out}/image.cdx.json" --lock "${out}/lock.cdx.json" \
+          --app "${GITHUB_WORKSPACE}/${APP_PATH}" --lockfile "${GITHUB_WORKSPACE}/${LOCKFILE}" \
+          --out "${out}/sbom.cdx.json"
+
+    - name: Attach the SBOM to the image
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+      run: |
+        set -euo pipefail
+        cd "${RUNNER_TEMP}/sbom"
+        oras attach --artifact-type application/vnd.cyclonedx+json "$IMAGE" \
+          sbom.cdx.json:application/vnd.cyclonedx+json
+        oras discover "$IMAGE"

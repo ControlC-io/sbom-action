@@ -1,0 +1,98 @@
+name: self-test
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  self-test:
+    runs-on: ubuntu-latest
+    env:
+      REPO: ghcr.io/controlc-io/sbom-action-test
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: docker/setup-buildx-action@v4.4.1
+
+      - uses: docker/login-action@v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push a throwaway image
+        id: build
+        uses: docker/build-push-action@v7.4.0
+        with:
+          context: fixtures/workspace
+          push: true
+          provenance: false
+          sbom: false
+          tags: ghcr.io/controlc-io/sbom-action-test:sha-${{ github.sha }}
+
+      - name: Run the action
+        uses: ./
+        with:
+          image: ghcr.io/controlc-io/sbom-action-test@${{ steps.build.outputs.digest }}
+          app-path: fixtures/workspace/apps/api
+          lockfile: fixtures/workspace/pnpm-lock.yaml
+
+      - uses: oras-project/setup-oras@v2.0.3
+        with:
+          version: 1.3.1
+
+      - name: Exactly one CycloneDX artifact is attached
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          oras discover --format json "${REPO}@${DIGEST}" > discover.json
+          cat discover.json
+          n=$(jq '[.referrers[] | select(.artifactType == "application/vnd.cyclonedx+json")] | length' discover.json)
+          test "$n" = 1
+
+      - name: Which lookup does GHCR support
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          reg=$(curl -fsS -u "x:${TOKEN}" "https://ghcr.io/token?service=ghcr.io&scope=repository:controlc-io/sbom-action-test:pull" | jq -r .token)
+          echo "::add-mask::${reg}"
+          code=$(curl -sS -o referrers.json -w '%{http_code}' -H "Authorization: Bearer ${reg}" \
+            "https://ghcr.io/v2/controlc-io/sbom-action-test/referrers/${DIGEST}")
+          echo "referrers API: HTTP ${code}"
+          cat referrers.json || true; echo
+          tag="sha256-${DIGEST#sha256:}"
+          tcode=$(curl -sS -o tag.json -w '%{http_code}' -H "Authorization: Bearer ${reg}" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json' \
+            "https://ghcr.io/v2/controlc-io/sbom-action-test/manifests/${tag}")
+          echo "tag schema ${tag}: HTTP ${tcode}"
+          cat tag.json || true; echo
+
+      - name: Inspect the SBOM
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          sbom_digest=$(jq -r '.referrers[] | select(.artifactType == "application/vnd.cyclonedx+json") | .digest' discover.json)
+          oras blob fetch --output sbom-layer.json "${REPO}@${sbom_digest}" 2>/dev/null || true
+          oras manifest fetch "${REPO}@${sbom_digest}" > sbom-manifest.json
+          layer=$(jq -r '.layers[0].digest' sbom-manifest.json)
+          oras blob fetch --output sbom.json "${REPO}@${layer}"
+          echo "operating-system components:"
+          jq -c '.components[] | select(.type=="operating-system") | {name,version,type}' sbom.json
+          echo "node:"
+          jq -c '.components[] | select(.name=="node") | {name,version,type,purl}' sbom.json
+          echo "bundled:"
+          jq -r '[.components[] | select(.properties[]? | .name=="controlc:bundled")] | length' sbom.json
+          root=$(jq -r '.metadata.component["bom-ref"]' sbom.json)
+          echo "direct:"
+          jq -r --arg r "$root" '.dependencies[] | select(.ref==$r) | .dependsOn[]' sbom.json
+          jq -e '[.components[] | select(.name=="vitest")] | length == 0' sbom.json
+          jq -e '[.components[] | select(.type=="operating-system")] | length >= 1' sbom.json
