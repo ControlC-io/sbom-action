@@ -81,7 +81,6 @@ jobs:
         run: |
           set -euo pipefail
           sbom_digest=$(jq -r '.referrers[] | select(.artifactType == "application/vnd.cyclonedx+json") | .digest' discover.json)
-          oras blob fetch --output sbom-layer.json "${REPO}@${sbom_digest}" 2>/dev/null || true
           oras manifest fetch "${REPO}@${sbom_digest}" > sbom-manifest.json
           layer=$(jq -r '.layers[0].digest' sbom-manifest.json)
           oras blob fetch --output sbom.json "${REPO}@${layer}"
