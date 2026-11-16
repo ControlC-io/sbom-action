@@ -9,7 +9,7 @@ It holds no secrets and is public so repositories in any GitHub organisation can
 ## Use
 
 ```yaml
-- uses: ControlC-io/sbom-action@v1.0.0
+- uses: ControlC-io/sbom-action@v1.1.0
   with:
     image: ghcr.io/owner/name@sha256:...   # required, the pushed digest
     app-path: apps/api                     # folder of the deployed app's package.json (default .)
@@ -28,6 +28,8 @@ Run it only after an image was actually pushed.
    and the lockfile, `pnpm-lock.yaml` (v9) or `package-lock.json` (v2/v3), chosen by file name (the app's `dependencies`, `optionalDependencies`, `peerDependencies`, plus the
    same for each `workspace:` package it uses, and everything those pull in). Lockfile libraries in
    that closure and missing from the image scan are added. devDependencies are left out.
+   If a pnpm lockfile has no snapshot for a package the closure reaches, the run shows a warning
+   naming the package and the lockfile; the libraries under it are then not marked as bundled.
 4. ORAS attaches the result with artifact type `application/vnd.cyclonedx+json`, then prints
    `oras discover` so the build log shows it.
 

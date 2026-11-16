@@ -60,8 +60,11 @@ function readJson(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
+// A GitHub Actions workflow command: shown as a warning annotation on the run, plain text elsewhere.
+const ghWarning = (message) => console.log(`::warning::${message.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A')}`);
+
 // Each reader returns { direct: Set<"name@version">, closure: Set<"name@version"> } for the app.
-function readPnpm(lockfile, appPath) {
+function readPnpm(lockfile, appPath, warn) {
   const lockDir = dirname(resolve(lockfile));
   const lf = parseLockfile(readFileSync(lockfile, 'utf8'));
   if (!lf.importers || !lf.snapshots) {
@@ -111,15 +114,26 @@ function readPnpm(lockfile, appPath) {
   };
   visitImporter(appImporter);
   const seen = new Set();
+  const missing = [];
   while (queue.length) {
     const key = queue.pop();
     if (seen.has(key)) continue;
     seen.add(key);
     closure.add(stripPeers(key));
+    if (!Object.hasOwn(lf.snapshots, key)) missing.push(key);
     const snap = lf.snapshots[key] ?? {};
     for (const field of ['dependencies', 'optionalDependencies']) {
       for (const [name, version] of Object.entries(snap[field] ?? {})) queue.push(pnpmKey(name, version));
     }
+  }
+  if (missing.length) {
+    // pnpm v9 writes a snapshot for every installed package, so a miss means the key was built wrong:
+    // the libraries under it are left out of the closure and are neither marked bundled nor added.
+    const shown = missing.slice(0, 10).join(', ') + (missing.length > 10 ? ` and ${missing.length - 10} more` : '');
+    warn(
+      `${lockfile}: no snapshot for ${shown}; the libraries ${missing.length === 1 ? 'it pulls' : 'they pull'} in ` +
+        'are not marked as bundled. Please report this at https://github.com/ControlC-io/sbom-action/issues',
+    );
   }
   return { direct, closure };
 }
@@ -175,10 +189,10 @@ function readNpm(lockfile, appPath) {
   return { direct, closure };
 }
 
-export function merge({ image, lock, appPath, lockfile }) {
+export function merge({ image, lock, appPath, lockfile, warn = ghWarning }) {
   const { direct, closure } = basename(lockfile) === 'package-lock.json'
     ? readNpm(lockfile, appPath)
-    : readPnpm(lockfile, appPath);
+    : readPnpm(lockfile, appPath, warn);
 
   const out = structuredClone(image);
   out.components ??= [];
