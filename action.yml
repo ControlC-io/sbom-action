@@ -14,8 +14,9 @@ inputs:
     description: >-
       Lockfile relative to the checkout: pnpm-lock.yaml (v9) or package-lock.json (v2/v3), chosen by
       file name. Empty: use pnpm-lock.yaml, else package-lock.json, found in the checkout root.
+      `none`: the image has no npm project (e.g. FROM nginx:alpine plus config files); attach Syft's
+      image SBOM as-is, without the lockfile scan or the bundled/direct marking.
     default: ''
-
   token:
     description: Token that can push packages to the image's repository.
     default: ${{ github.token }}
@@ -47,13 +48,16 @@ runs:
       shell: bash
       env:
         IMAGE: ${{ inputs.image }}
+        LOCKFILE: ${{ inputs.lockfile }}
         SYFT: ${{ steps.syft.outputs.cmd }}
       run: |
         set -euo pipefail
         out="${RUNNER_TEMP}/sbom"
         mkdir -p "$out"
         "$SYFT" "registry:${IMAGE}" -o "cyclonedx-json@1.6=${out}/image.cdx.json"
-        "$SYFT" "dir:${GITHUB_WORKSPACE}" -o "cyclonedx-json@1.6=${out}/lock.cdx.json"
+        if [ "$LOCKFILE" != none ]; then
+          "$SYFT" "dir:${GITHUB_WORKSPACE}" -o "cyclonedx-json@1.6=${out}/lock.cdx.json"
+        fi
 
     - name: Merge
       shell: bash
@@ -63,12 +67,17 @@ runs:
       run: |
         set -euo pipefail
         out="${RUNNER_TEMP}/sbom"
+        if [ "$LOCKFILE" = none ]; then
+          echo "lockfile: none -> attaching the image scan as-is"
+          cp "${out}/image.cdx.json" "${out}/sbom.cdx.json"
+          exit 0
+        fi
         if [ -z "$LOCKFILE" ]; then
           for f in pnpm-lock.yaml package-lock.json; do
             if [ -f "${GITHUB_WORKSPACE}/$f" ]; then LOCKFILE="$f"; break; fi
           done
         fi
-        [ -n "$LOCKFILE" ] || { echo "::error::no pnpm-lock.yaml or package-lock.json in the checkout root; set the lockfile input"; exit 1; }
+        [ -n "$LOCKFILE" ] || { echo "::error::no pnpm-lock.yaml or package-lock.json in the checkout root; set the lockfile input (or lockfile: none for an image without an npm project)"; exit 1; }
         node "${GITHUB_ACTION_PATH}/merge.mjs" \
           --image "${out}/image.cdx.json" --lock "${out}/lock.cdx.json" \
           --app "${GITHUB_WORKSPACE}/${APP_PATH}" --lockfile "${GITHUB_WORKSPACE}/${LOCKFILE}" \

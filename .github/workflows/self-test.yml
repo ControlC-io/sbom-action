@@ -102,3 +102,39 @@ jobs:
           jq -r --arg r "$root" '.dependencies[] | select(.ref==$r) | .dependsOn[]' sbom.json
           jq -e '[.components[] | select(.name=="vitest")] | length == 0' sbom.json
           jq -e '[.components[] | select(.type=="operating-system")] | length >= 1' sbom.json
+
+      # ---- lockfile: none (an image without an npm project) ------------------------------------
+      - name: Build and push an image without an npm project
+        id: build-image-only
+        uses: docker/build-push-action@v7.4.0
+        with:
+          context: fixtures/image-only
+          push: true
+          provenance: false
+          sbom: false
+          tags: ghcr.io/controlc-io/sbom-action-test:sha-${{ github.sha }}-image-only
+
+      - name: Run the action with lockfile none
+        uses: ./
+        with:
+          image: ghcr.io/controlc-io/sbom-action-test@${{ steps.build-image-only.outputs.digest }}
+          lockfile: none
+
+      - name: The image-only SBOM is attached and is the image scan as-is
+        env:
+          DIGEST: ${{ steps.build-image-only.outputs.digest }}
+        run: |
+          set -euo pipefail
+          oras discover --format json "${REPO}@${DIGEST}" > discover-image-only.json
+          cat discover-image-only.json
+          n=$(jq '[.referrers[] | select(.artifactType == "application/vnd.cyclonedx+json")] | length' discover-image-only.json)
+          test "$n" = 1
+          sbom_digest=$(jq -r '.referrers[] | select(.artifactType == "application/vnd.cyclonedx+json") | .digest' discover-image-only.json)
+          oras manifest fetch "${REPO}@${sbom_digest}" > sbom-image-only-manifest.json
+          layer=$(jq -r '.layers[0].digest' sbom-image-only-manifest.json)
+          oras blob fetch --output sbom-image-only.json "${REPO}@${layer}"
+          jq -c '.components[] | select(.type=="operating-system") | {name,version,type}' sbom-image-only.json
+          jq -e '.bomFormat == "CycloneDX" and .specVersion == "1.6"' sbom-image-only.json
+          jq -e '[.components[] | select(.type=="operating-system" and .name=="alpine")] | length == 1' sbom-image-only.json
+          jq -e '[.components[] | select(.properties[]? | .name=="controlc:bundled")] | length == 0' sbom-image-only.json
+          jq -e '[.dependencies[]? | select(.ref=="controlc:root")] | length == 0' sbom-image-only.json
