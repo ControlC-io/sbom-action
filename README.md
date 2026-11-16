@@ -9,7 +9,7 @@ It holds no secrets and is public so repositories in any GitHub organisation can
 ## Use
 
 ```yaml
-- uses: ControlC-io/sbom-action@v1.1.0
+- uses: ControlC-io/sbom-action@v1.1.1
   with:
     image: ghcr.io/owner/name@sha256:...   # required, the pushed digest
     app-path: apps/api                     # folder of the deployed app's package.json (default .)
