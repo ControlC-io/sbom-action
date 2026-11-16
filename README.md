@@ -9,16 +9,21 @@ It holds no secrets and is public so repositories in any GitHub organisation can
 ## Use
 
 ```yaml
-- uses: ControlC-io/sbom-action@v1.0.0
+- uses: ControlC-io/sbom-action@v1.1.0
   with:
     image: ghcr.io/owner/name@sha256:...   # required, the pushed digest
     app-path: apps/api                     # folder of the deployed app's package.json (default .)
-    lockfile: pnpm-lock.yaml               # or package-lock.json; default: whichever is in the checkout root
+    lockfile: pnpm-lock.yaml               # or package-lock.json, or none; default: whichever is in the checkout root
     token: ${{ github.token }}             # default; needs packages: write
 ```
 
 The job needs `permissions: packages: write` and a checkout of the repository (for the lockfile).
 Run it only after an image was actually pushed.
+
+**An image without an npm project** (say `FROM nginx:alpine` plus a config file): set
+`lockfile: none`. Steps 2 and 3 below are skipped and Syft's image SBOM (OS packages and anything
+else installed in the image) is attached as-is, same format and artifact type. No checkout is needed.
+An empty `lockfile` still auto-detects and fails if neither lockfile is in the checkout root.
 
 ## What it does
 
@@ -28,6 +33,8 @@ Run it only after an image was actually pushed.
    and the lockfile, `pnpm-lock.yaml` (v9) or `package-lock.json` (v2/v3), chosen by file name (the app's `dependencies`, `optionalDependencies`, `peerDependencies`, plus the
    same for each `workspace:` package it uses, and everything those pull in). Lockfile libraries in
    that closure and missing from the image scan are added. devDependencies are left out.
+   If a pnpm lockfile has no snapshot for a package the closure reaches, the run shows a warning
+   naming the package and the lockfile; the libraries under it are then not marked as bundled.
 4. ORAS attaches the result with artifact type `application/vnd.cyclonedx+json`, then prints
    `oras discover` so the build log shows it.
 
@@ -68,6 +75,9 @@ The self-test run proving this: see the Actions tab, workflow `self-test`.
 workspace: `@fx/api` depends on `fastify` and the workspace package `@fx/schema`, which depends on
 `zod`; `vitest` is a dev dependency), runs the action, and checks that exactly one CycloneDX artifact
 is attached, that `vitest` is absent and an OS component is present, and which lookup GHCR supports.
+It then builds `fixtures/image-only` (Alpine plus a config file), runs the action with
+`lockfile: none`, and checks that exactly one CycloneDX 1.6 artifact with the Alpine OS component and
+no bundled libraries is attached.
 
 `node --test` runs the unit tests of `merge.mjs` (Node 22, no dependencies).
 

@@ -295,3 +295,81 @@ test('npm: the same production closure as pnpm for the same workspace', () => {
   assert.deepEqual(directOf(npm), directOf(pnpm));
   assert.equal(names(npm).length > 10, true);
 });
+
+// ---- a lockfile snapshot key that is not there ------------------------------------------------
+import { spawnSync } from 'node:child_process';
+
+const missingSnapshot = () =>
+  workspace({
+    'package.json': { name: 'app', dependencies: { fastify: '5.4.0' } },
+    'pnpm-lock.yaml': `lockfileVersion: '9.0'
+
+importers:
+
+  .:
+    dependencies:
+      fastify:
+        specifier: 5.4.0
+        version: 5.4.0
+
+snapshots:
+
+  fastify@5.4.1:
+    dependencies:
+      pino: 9.0.0
+
+  pino@9.0.0: {}
+`,
+  });
+
+test('pnpm: a missing snapshot key is reported, naming the key and the lockfile', () => {
+  const dir = missingSnapshot();
+  const warnings = [];
+  const sbom = merge({
+    image: emptyImage(),
+    lock: { components: [comp('fastify', '5.4.0'), comp('pino', '9.0.0')] },
+    appPath: dir,
+    lockfile: join(dir, 'pnpm-lock.yaml'),
+    warn: (m) => warnings.push(m),
+  });
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /fastify@5\.4\.0/);
+  assert.ok(warnings[0].includes(join(dir, 'pnpm-lock.yaml')), warnings[0]);
+  assert.deepEqual(names(sbom), ['fastify@5.4.0'], 'the subtree under the missing key is not reachable');
+});
+
+test('pnpm: a complete lockfile reports nothing', () => {
+  const warnings = [];
+  merge({
+    image: read('./fixtures/image.cdx.json'),
+    lock: read('./fixtures/lock.cdx.json'),
+    appPath: fileURLToPath(new URL('./fixtures/workspace/apps/api', import.meta.url)),
+    lockfile: fileURLToPath(new URL('./fixtures/workspace/pnpm-lock.yaml', import.meta.url)),
+    warn: (m) => warnings.push(m),
+  });
+  assert.deepEqual(warnings, []);
+});
+
+test('cli: a missing snapshot key prints a GitHub Actions ::warning:: and still writes the SBOM', () => {
+  const dir = missingSnapshot();
+  writeFileSync(join(dir, 'image.cdx.json'), JSON.stringify(emptyImage()));
+  writeFileSync(join(dir, 'lock.cdx.json'), JSON.stringify({ components: [comp('fastify', '5.4.0')] }));
+  const r = spawnSync(
+    process.execPath,
+    [
+      fileURLToPath(new URL('./merge.mjs', import.meta.url)),
+      '--image', join(dir, 'image.cdx.json'),
+      '--lock', join(dir, 'lock.cdx.json'),
+      '--app', dir,
+      '--lockfile', join(dir, 'pnpm-lock.yaml'),
+      '--out', join(dir, 'sbom.cdx.json'),
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(r.status, 0, r.stderr);
+  const line = r.stdout.split('\n').find((l) => l.startsWith('::warning'));
+  assert.ok(line, r.stdout);
+  assert.match(line, /fastify@5\.4\.0/);
+  assert.ok(line.includes('pnpm-lock.yaml'), line);
+  assert.ok(JSON.parse(readFileSync(join(dir, 'sbom.cdx.json'), 'utf8')).components.length === 1);
+});
